@@ -37,7 +37,7 @@ recommend dosages, or guess unreadable information.
 | 6 | Simple explanation | Plain-English sentence per medicine, built by code from extracted fields (no new information can be added). |
 | 7 | Uncertainty detection | Flags low-confidence OCR words, unclear names, missing fields, frequency/timing conflicts, duplicates, and names the AI may have "corrected". |
 | 8 | Downloads | CSV schedule (opens in Excel) and a printable HTML report with the disclaimer. |
-| 9 | Error handling | Friendly messages for bad files, empty input, OCR failure, invalid API key, rate limits, invalid JSON, network errors. |
+| 9 | Error handling | Friendly messages for bad files, empty input, OCR failure, invalid API key, rate limits, busy servers (automatic retry + backup model), invalid JSON, network errors. |
 | 10 | Disclaimer | Shown at the top and bottom of every page. |
 
 ---
@@ -48,8 +48,8 @@ recommend dosages, or guess unreadable information.
 |---------|------------|
 | Language | Python 3.11 / 3.12 |
 | User interface | Streamlit |
-| Large language model | Google Gemini Flash (via the `google-genai` SDK) |
-| OCR | Tesseract OCR + `pytesseract` |
+| Large language model | Google Gemini Flash (via the `google-genai` SDK), with a backup model |
+| OCR | Tesseract OCR + `pytesseract` (offline), or Gemini Vision (handwriting) |
 | Image processing | Pillow, OpenCV |
 | PDF processing | PyMuPDF |
 | Secrets | python-dotenv |
@@ -67,23 +67,28 @@ No LangChain or other frameworks are used: one direct API call is all this proje
                     │   Streamlit UI  (app.py)     │
                     └──────────────┬───────────────┘
                                    │
-        ┌──────────────────────────┼─────────────────────────┐
-        │ Image (JPG/PNG)          │ PDF                     │ Typed text
-        ▼                          ▼                         │
-┌──────────────────┐   ┌───────────────────────┐            │
-│ ocr_processor.py │◄──│ utils/pdf_handler.py  │            │
-│ OpenCV clean-up  │   │ digital text: direct  │            │
-│ Tesseract OCR    │   │ scanned page: → OCR   │            │
-│ + confidence     │   └───────────────────────┘            │
-└────────┬─────────┘                                         │
-         └──────────────► Editable text box ◄────────────────┘
-                          (user corrects OCR mistakes)
+         ┌─────────────────────────┴───────────┐
+         │ Upload (JPG / PNG / PDF)            │ Typed text
+         │ user chooses the reader:            │
+         ▼                                     │
+┌─────────────────────────┐  ┌──────────────────────────┐
+│ A. Tesseract (offline)  │  │ B. Gemini Vision         │
+│ ocr_processor.py        │  │ ocr_processor.py +       │
+│ shadow removal, deskew, │  │ gemini_service.py        │
+│ best of 4 variants,     │  │ word-for-word transcript,│
+│ word confidence         │  │ unreadable → [unclear]   │
+│ PDFs: utils/pdf_handler │  │ (images and PDFs)        │
+│ (digital text / OCR)    │  │                          │
+└───────────┬─────────────┘  └────────────┬─────────────┘
+            └──────────► Editable text box ◄──────────────┘
+                     (user corrects reading mistakes)
                                    │
                                    ▼
                     ┌──────────────────────────────┐
                     │ gemini_service.py            │
-                    │ strict system prompt          │
-                    │ → Gemini Flash → JSON         │
+                    │ strict system prompt         │
+                    │ → Gemini Flash → JSON        │
+                    │ retries + backup model       │
                     └──────────────┬───────────────┘
                                    ▼
                     ┌──────────────────────────────┐
@@ -98,6 +103,11 @@ No LangChain or other frameworks are used: one direct API call is all this proje
                     │ CSV, printable report        │
                     └──────────────────────────────┘
 ```
+
+**Two ways to read a file.** Tesseract runs locally and is free and private, but it is only
+reliable on printed text. Gemini Vision reads handwriting and difficult phone photos much
+better, but the image is sent to Google. Either way, the user sees and can edit the text before
+any medicine is extracted.
 
 **Two layers of safety.** Gemini is instructed not to guess (layer 1). Python code then
 re-checks its answer (layer 2). For example, if the prescription says `Amox1c1l|in` and the AI
@@ -140,7 +150,7 @@ MediRead-AI/
 │       └── tc5_unclear_names.txt
 │
 └── tests/
-    └── test_parser.py          # 13 offline unit tests (no API key needed)
+    └── test_parser.py          # 14 offline unit tests (no API key needed)
 ```
 
 ---
@@ -242,9 +252,13 @@ python -m unittest discover tests -v
 
 ## 8. How to Use
 
-1. **Step 1 – Add the prescription:** upload an image/PDF and click **Read text from file**, or
-   open the *Type or paste* tab and click **Load sample prescription**.
-2. **Step 2 – Check the text:** fix any OCR mistakes. Words the OCR was unsure about are listed.
+1. **Step 1 – Add the prescription:** upload an image/PDF, choose the reader, and click
+   **Read text from file**. Or open the *Type or paste* tab and click **Load sample prescription**.
+   - **Tesseract OCR** – offline; best for printed prescriptions and clear scans.
+   - **Gemini Vision** – best for handwriting and phone photos; needs internet.
+2. **Step 2 – Check the text:** fix any reading mistakes. Words Tesseract was unsure about are
+   listed, and words Gemini Vision could not read appear as `[unclear]`. Replace them only if
+   you can read them on the paper prescription.
 3. **Step 3 – Extract:** click **Extract Prescription**.
 4. Review the schedule, the simple-English explanation, medicine details and warnings.
 5. Download the **CSV** or the **printable report** (open it and press Ctrl+P to print/save as PDF).
@@ -326,7 +340,7 @@ Open the **Test Cases** page in the sidebar, click **Load into reader**, then **
 
 ### Automated unit tests (offline)
 
-`tests/test_parser.py` contains 13 tests that feed **mocked Gemini replies** into the parser, so
+`tests/test_parser.py` contains 14 tests that feed **mocked Gemini replies** into the parser, so
 they run without an API key or internet. They check:
 
 - all five test cases above (correct rows, timings, missing fields);
@@ -334,10 +348,11 @@ they run without an API key or internet. They check:
 - invalid timings such as "Evening" are rejected rather than forced into a column;
 - an AI-"corrected" medicine name (`Amoxicillin` for `Amox1c1l|in`) is caught;
 - low-confidence OCR words produce a warning;
+- lines containing `[unclear]` from Gemini Vision are flagged for verification;
 - code fences in the reply are removed; non-JSON replies give a friendly error;
 - empty results produce a warning; CSV and report are generated with the disclaimer.
 
-Expected output: `Ran 13 tests ... OK`
+Expected output: `Ran 14 tests ... OK`
 
 ### Error-handling checks
 
@@ -349,8 +364,9 @@ Expected output: `Ran 13 tests ... OK`
 | Empty text | "The prescription text is empty…" |
 | Tesseract missing | Install instructions; typed input still works |
 | No / invalid API key | "No Gemini API key found…" / "The Gemini API key was rejected…" |
-| Rate limit (HTTP 429) | Retries once, then "Wait about a minute…" |
-| Gemini server busy | Retries once, then a friendly message |
+| Rate limit (HTTP 429) | Retries, then tries the backup model, then "Wait about a minute…" |
+| Gemini server busy (HTTP 503 "high demand") | Retries with increasing waits, switches to the backup model, then a friendly message |
+| Gemini Vision chosen but no API key / no internet | Clear message; Tesseract and typed input still work |
 | Invalid JSON from AI | "The AI response was not valid JSON. Please click Extract again." |
 | No medicines found | Warning that the text may be unreadable or not a prescription |
 
@@ -381,7 +397,9 @@ Add your own screenshots to a `screenshots/` folder and link them here:
   instructions are flagged rather than placed.
 - English prescriptions only (Tesseract `eng` language pack).
 - Requires an internet connection and a Gemini API key; free-tier rate limits apply.
-- Prescription text is sent to Google's Gemini API. Use only fictional prescriptions for demos.
+- Prescription text is sent to Google's Gemini API, and with Gemini Vision the image itself is
+  sent too. Use only fictional prescriptions for demos.
+- Tesseract tries several image versions, so reading a photo takes a few seconds.
 
 ---
 
