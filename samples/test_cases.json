@@ -1,0 +1,37 @@
+[
+  {
+    "id": "TC1",
+    "title": "One medicine",
+    "file": "tc1_single_medicine.txt",
+    "checks": "One complete medicine is extracted.",
+    "expected": "1 row: Paracetamol, 500 mg, 1 tablet, twice daily, after food, 5 days. Morning/Afternoon/Night show 'Not specified' because 'twice daily' does not say which times of day, and a note asks the user to check the times with a pharmacist."
+  },
+  {
+    "id": "TC2",
+    "title": "Several medicines",
+    "file": "tc2_multiple_medicines.txt",
+    "checks": "Every medicine becomes its own row with its own instructions.",
+    "expected": "4 rows. Abbreviations are expanded (TDS = Three times daily). Pantoprazole shows Morning because 'before breakfast' is written. No medicine is added or dropped."
+  },
+  {
+    "id": "TC3",
+    "title": "Morning and night timings",
+    "file": "tc3_morning_night.txt",
+    "checks": "Dose patterns like 1-0-1 are mapped to the correct columns.",
+    "expected": "Metformin: Morning ✓, Afternoon —, Night ✓. Atorvastatin: Night ✓ only. Both 30 days, after food / after dinner."
+  },
+  {
+    "id": "TC4",
+    "title": "Missing dosage or duration",
+    "file": "tc4_missing_details.txt",
+    "checks": "Missing values are shown as 'Not specified', never filled in.",
+    "expected": "Cetirizine: duration 'Not specified'. Ambroxol: dosage 'Not specified'. Vitamin D3: dosage, frequency and duration 'Not specified'. Each has a warning and the result is marked as needing verification."
+  },
+  {
+    "id": "TC5",
+    "title": "Unclear or misread names",
+    "file": "tc5_unclear_names.txt",
+    "checks": "Garbled OCR-style names are flagged, not guessed or corrected.",
+    "expected": "Names are shown as 'Unclear – Confirm with Pharmacist/Doctor' (or flagged as not matching the text). The app must NOT silently turn 'Amox1c1l|in' into 'Amoxicillin'. A red verification banner appears."
+  }
+]
